@@ -1,51 +1,52 @@
-ARG BUILD_FROM=ghcr.io/hassio-addons/base:13.0.0
-# hadolint ignore=DL3006
-FROM ${BUILD_FROM}
+FROM python:3.9-buster
 
-# Set shell
-SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+WORKDIR /app
 
-# Copy Python requirements file
-COPY requirements.txt /tmp/
+RUN pip install Cython
+RUN dpkg --add-architecture armhf
+RUN apt-get update
+RUN apt-get install -y gcc \
+                       git \
+                       libatlas3-base \
+		       libavformat58 \
+		       portaudio19-dev \
+		       avahi-daemon \
+		       pulseaudio
+RUN pip install --upgrade pip wheel setuptools
+RUN pip install lastversion
+RUN pip install git+https://github.com/LedFx/LedFx
 
-# Setup base
-# hadolint ignore=DL3042
-RUN \
-    apk add --no-cache --virtual .build-dependencies \
-        build-base=0.5-r3 \
-        cython=0.29.32-r0 \
-        python3-dev=3.10.9-r1 \
-        zlib-dev=1.2.13-r0 \
-    && apk add --no-cache \
-        alsa-plugins-pulse=1.2.7.1-r0 \
-        ffmpeg-libs=5.1.2-r1 \
-        nginx=1.22.1-r0 \
-        portaudio-dev=19.7.0-r0 \
-        pulseaudio-alsa=16.1-r6 \
-        pulseaudio=16.1-r6 \
-        py3-packaging=21.3-r2 \
-        py3-pip=22.3.1-r1 \
-        python3=3.10.9-r1 \
-    \
-    && pip3 install -r /tmp/requirements.txt \
-    \
-    && apk del --no-cache --purge .build-dependencies \
-    && rm -fr \
-        /etc/nginx \
-        /root/.cache \
-        /tmp/*
+RUN apt-get install -y alsa-utils
+RUN adduser root pulse-access
 
-# Copy root filesystem
-COPY rootfs /
+# https://gnanesh.me/avahi-docker-non-root.html
+RUN apt-get install -y libnss-mdns
+RUN echo '*' > /etc/mdns.allow \
+	&& sed -i "s/hosts:.*/hosts:          files mdns4 dns/g" /etc/nsswitch.conf \
+	&& printf "[server]\nenable-dbus=no\n" >> /etc/avahi/avahi-daemon.conf \
+	&& chmod 777 /etc/avahi/avahi-daemon.conf \
+	&& mkdir -p /var/run/avahi-daemon \
+	&& chown avahi:avahi /var/run/avahi-daemon \
+	&& chmod 777 /var/run/avahi-daemon
 
-# Build arguments
-ARG BUILD_ARCH
-ARG BUILD_DATE
-ARG BUILD_DESCRIPTION
-ARG BUILD_NAME
-ARG BUILD_REF
-ARG BUILD_REPOSITORY
-ARG BUILD_VERSION
+RUN apt-get install -y wget \
+                       libavahi-client3:armhf \
+                       libavahi-common3:armhf \
+                       apt-utils \
+		       libvorbisidec1:armhf
+
+RUN apt-get install -y squeezelite 
+
+ARG TARGETPLATFORM
+RUN if [ "$TARGETPLATFORM" = "linux/arm/v7" ]; then ARCHITECTURE=armhf; elif [ "$TARGETPLATFORM" = "linux/arm64" ]; then ARCHITECTURE=armhf; else ARCHITECTURE=amd64; fi \
+    && lastversion download badaix/snapcast --format assets --filter "^snapclient_(?:(\d+)\.)?(?:(\d+)\.)?(?:(\d+)\-)?(?:(\d)(_$ARCHITECTURE\.deb))$" -o snapclient.deb
+
+RUN apt-get install -fy ./snapclient.deb
+
+COPY setup-files/ /app/
+RUN chmod a+wrx /app/*
+
+ENTRYPOINT ./entrypoint.sh
 
 # Labels
 LABEL \
